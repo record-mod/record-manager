@@ -1,0 +1,174 @@
+package dev.tralwdwd.record.manager.installer.step.download.base
+
+import android.content.Context
+import androidx.compose.runtime.Stable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import dev.tralwdwd.record.manager.R
+import dev.tralwdwd.record.manager.domain.manager.DownloadManager
+import dev.tralwdwd.record.manager.domain.manager.DownloadResult
+import dev.tralwdwd.record.manager.domain.manager.Mirror
+import dev.tralwdwd.record.manager.domain.manager.PreferenceManager
+import dev.tralwdwd.record.manager.installer.step.Step
+import dev.tralwdwd.record.manager.installer.step.StepGroup
+import dev.tralwdwd.record.manager.installer.step.StepRunner
+import dev.tralwdwd.record.manager.installer.step.StepStatus
+import dev.tralwdwd.record.manager.utils.mainThread
+import dev.tralwdwd.record.manager.utils.showToast
+import kotlinx.coroutines.CancellationException
+import org.koin.core.component.inject
+import java.io.File
+import kotlin.math.roundToInt
+
+/**
+ * Specialized step used to download a file
+ *
+ * Files are downloaded to [destination] then copied to [workingCopy] for safe patching
+ */
+@Stable
+abstract class DownloadStep : Step() {
+
+    protected val preferenceManager: PreferenceManager by inject()
+
+    private val downloadManager: DownloadManager by inject()
+    private val context: Context by inject()
+
+    /**
+     * Url of the desired file to download
+     */
+    open val downloadFullUrl: String? = null
+
+    /**
+     * Mirror url path of the desired file to download
+     */
+    open val downloadMirrorUrlPath: String? = null
+
+    /**
+     * Where to download the file to
+     */
+    abstract val destination: File
+
+    /**
+     * Where the downloaded file should be copied to so that it can be used for patching
+     */
+    abstract val workingCopy: File
+
+    override val group: StepGroup = StepGroup.DL
+
+    var cached by mutableStateOf(false)
+        private set
+
+    suspend fun download(downloadUrl: String, destination: File, runner: StepRunner): Boolean {
+        val fileName = destination.name
+        var lastProgress: Float? = null
+
+        runner.logger.i("Downloading $fileName from $downloadUrl")
+
+        val result = downloadManager.download(downloadUrl, destination) { newProgress ->
+            progress = newProgress
+
+            if (newProgress != lastProgress && newProgress != null) {
+                lastProgress = newProgress
+                runner.logger.d("$fileName download progress: ${(newProgress * 100f).roundToInt()}%")
+            }
+        }
+
+        when (result) {
+            is DownloadResult.Success -> {
+                return true
+            }
+
+            is DownloadResult.Error -> {
+                runner.logger.e("Current mirror ${preferenceManager.mirror.name} failed: ${result.debugReason}")
+                return false
+            }
+
+            is DownloadResult.Cancelled -> {
+                status = StepStatus.UNSUCCESSFUL
+                if (destination.delete()) {
+                    runner.logger.i("$fileName deleted from cache due to cancellation")
+                }
+                throw CancellationException("$fileName download cancelled")
+            }
+        }
+    }
+
+    /**
+     * Verifies that a file was properly downloaded
+     */
+    open suspend fun verify() {
+        if (!destination.exists())
+            error("Downloaded file is missing: ${destination.absolutePath}")
+
+        if (destination.length() <= 0)
+            error("Downloaded file is empty: ${destination.absolutePath}")
+    }
+
+    override suspend fun run(runner: StepRunner) {
+        val fileName = destination.name
+        runner.logger.i("Checking if $fileName is cached")
+        if (destination.exists()) {
+            runner.logger.i("Checking if $fileName isn't empty")
+            if (destination.length() > 0) {
+                runner.logger.i("$fileName is cached")
+                cached = true
+
+                runner.logger.i("Moving $fileName to working directory")
+                destination.copyTo(workingCopy, true)
+
+                status = StepStatus.SUCCESSFUL
+                return
+            }
+
+            runner.logger.i("Deleting empty file: $fileName")
+            destination.delete()
+        }
+
+        runner.logger.i("$fileName was not properly cached, downloading now")
+
+        var downloadUrl = if (downloadMirrorUrlPath != null) {
+            preferenceManager.mirror.baseUrl + downloadMirrorUrlPath
+        } else {
+            downloadFullUrl
+        }
+
+        var successfulDownload = download(downloadUrl!!, destination, runner)
+
+        // If the current mirror fails, try other mirrors
+        if (!successfulDownload && downloadMirrorUrlPath != null) {
+            for (mirror in Mirror.entries - preferenceManager.mirror) {
+                downloadUrl = mirror.baseUrl + downloadMirrorUrlPath
+                runner.logger.i("Trying mirror: ${mirror.name}")
+        
+                if (download(downloadUrl, destination, runner)) {
+                    preferenceManager.mirror = mirror
+                    successfulDownload = true
+                    break
+                }
+            }
+        }
+
+        if (!successfulDownload) {
+            mainThread {
+                context.showToast(R.string.msg_download_failed)
+                runner.downloadErrored = true
+            }
+            throw Error("Failed to download $fileName from all mirrors.")
+        }
+
+        try {
+            runner.logger.i("Verifying downloaded file")
+            verify()
+            runner.logger.i("$fileName downloaded successfully")
+        } catch (t: Throwable) {
+            mainThread {
+                context.showToast(R.string.msg_download_verify_failed)
+            }
+            throw t
+        }
+
+        runner.logger.i("Moving $fileName to working directory")
+        destination.copyTo(workingCopy, true)
+    }
+}
