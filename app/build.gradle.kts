@@ -15,11 +15,16 @@ plugins {
 val isRelease = System.getenv("RELEASE")?.toBoolean() ?: false
 val gitCurrentBranch = providers.execIgnoreCode("git", "symbolic-ref", "--quiet", "--short", "HEAD").takeIf { it.isNotEmpty() }
 val gitLatestCommit = providers.execIgnoreCode("git", "rev-parse", "--short", "HEAD")
-val gitHasLocalCommits = gitCurrentBranch?.let { providers.execIgnoreCode("git", "log", "origin/$gitCurrentBranch..HEAD").isNotEmpty() } ?: false
+val gitHasLocalCommits = gitCurrentBranch?.let { branch ->
+    val remoteBranchExists = providers.execIgnoreCode("git", "ls-remote", "--heads", "origin", branch)
+        .isNotEmpty()
+
+    remoteBranchExists && providers.execIgnoreCode("git", "log", "origin/$branch..HEAD").isNotEmpty()
+} ?: false
 val gitHasHasLocalChanges = providers.execIgnoreCode("git", "status", "-s").isNotEmpty()
 
 android {
-    namespace = "dev.shiggy.manager"
+    namespace = "dev.tralwdwd.record.manager"
     compileSdk = 36
 
     defaultConfig {
@@ -31,10 +36,11 @@ android {
             useSupportLibrary = true
         }
 
-        buildConfigField("String", "APPLICATION_NAME", "\"Shiggy Manager\"")
-        buildConfigField("String", "TAG", "\"ShiggyManager\"")
+        buildConfigField("String", "APPLICATION_NAME", "\"ReCord Manager\"")
+        buildConfigField("String", "TAG", "\"ReCordManager\"")
 
-        buildConfigField("String", "GITHUB_ORG", "\"ShiggyCord\"")
+        buildConfigField("String", "GITHUB_ORG", "\"record-mod\"")
+        buildConfigField("String", "GITHUB_REPO", "\"record-bundle\"")
         buildConfigField("String", "SUPPORT_SERVER", "\"\"")
 
         buildConfigField("String", "BACKEND_URL", "\"https://aliucord.com/\"")

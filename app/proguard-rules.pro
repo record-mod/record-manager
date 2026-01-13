@@ -33,7 +33,7 @@
 }
 
 # Keep class names of patching steps since they're used via reflection
--keepnames class com.aliucord.manager.patcher.steps.**
+-keepnames class dev.tralwdwd.record.manager.patcher.steps.**
 
 # Repackage classes into the top-level.
 -repackageclasses

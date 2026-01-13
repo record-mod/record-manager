@@ -1,62 +1,56 @@
-name: Build & Publish Release App
+name: Release
 
 on:
-  push:
-    tags: [ "v*.*.*" ]
-
-concurrency:
-  group: "release"
-  cancel-in-progress: true
-
-permissions:
-  contents: write
+    workflow_dispatch:
+    push:
+        branches:
+            - main
+            - dev
 
 jobs:
-  publish:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+    release:
+        name: Release
+        permissions:
+            contents: write
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
 
-      - name: Setup JDK 21
-        uses: actions/setup-java@v4
-        with:
-          java-version: 21
-          distribution: zulu
+            - name: Setup Java
+              uses: actions/setup-java@v4
+              with:
+                  distribution: "temurin"
+                  java-version: "17"
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+            - name: Cache Gradle
+              uses: burrunan/gradle-cache-action@v2
 
-      - name: Build with Gradle
-        env:
-          SIGNING_KEY_ALIAS: ${{ secrets.keyAlias }}
-          SIGNING_KEY_PASSWORD: ${{ secrets.keyPassword }}
-          SIGNING_STORE_PASSWORD: ${{ secrets.keystorePassword }}
-          SIGNING_STORE_FILE: ${{ github.workspace }}/release.keystore
-          RELEASE: true
-        run: |
-          echo "${{ secrets.keystore }}" | base64 -d > release.keystore
-          ./gradlew :app:packageRelease --stacktrace
-          rm release.keystore
+            - name: Build
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+              run: ./gradlew build --no-daemon
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: app
-          if-no-files-found: error
-          path: app/build/outputs/apk/release/app-release.apk
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "lts/*"
+                  cache: "npm"
 
-      - name: Publish Release
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          tag="${{ github.ref_name }}"
-          apk_file="shiggy-manager-$tag.apk"
-          mv -T ./app/build/outputs/apk/release/app-release.apk "./$apk_file"
+            - name: Install dependencies
+              run: npm install
 
-          gh release create "$tag" \
-            --title "$tag" \
-            --generate-notes \
-            --verify-tag \
-            --fail-on-no-commits \
-            "./$apk_file"
+            - name: Setup keystore
+              run: |
+                  echo "${{ secrets.KEYSTORE }}" | base64 --decode > "app/keystore.jks"
+
+            - name: Release
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                  KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+                  KEYSTORE_ENTRY_ALIAS: ${{ secrets.KEYSTORE_ENTRY_ALIAS }}
+                  KEYSTORE_ENTRY_PASSWORD: ${{ secrets.KEYSTORE_ENTRY_PASSWORD }}
+              run: |
+                  npx semantic-release

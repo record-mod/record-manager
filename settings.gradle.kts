@@ -25,5 +25,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "AliucordManager"
+rootProject.name = "ReCordManager"
 include(":app")
